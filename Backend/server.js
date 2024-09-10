@@ -2,70 +2,103 @@ const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const { PrismaClient } = require('@prisma/client');
+const fs = require('fs');
+const path = require('path');
 
-// Initialize Express and Prisma
 const app = express();
 const prisma = new PrismaClient();
 
-// Middleware
 app.use(express.json());
 app.use(cors());
 
-// Welcome route
-app.get('/', (req, res) => {
-    res.send('Welcome to online storage API');
-});
+// Ensure the uploads directory exists
+const uploadDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir);
+}
 
-// Configure Multer for file storage
+// Serve static files from the uploads directory
+app.use('/uploads', express.static(uploadDir));
+
+// Connect to the database
+async function connectToDatabase() {
+  try {
+    await prisma.$connect();
+    console.log('Database connected successfully');
+  } catch (error) {
+    console.error('Error connecting to the database', error);
+    process.exit(1); 
+  }
+}
+
+connectToDatabase();
+
+// Define the storage for multer
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, 'uploads/'); // Directory where files will be stored
+    cb(null, uploadDir); // Save files to the uploads directory
   },
   filename: (req, file, cb) => {
-    cb(null, `${Date.now()}-${file.originalname}`); // Unique filename with timestamp
+    cb(null, `${Date.now()}-${file.originalname}`); // Timestamp filenames for uniqueness
   }
 });
 
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB file size limit
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ['image/jpeg', 'image/png', 'application/pdf', 'text/plain'];
+    if (!allowedTypes.includes(file.mimetype)) {
+      const error = new Error('Invalid file type');
+      error.code = 'INVALID_FILE_TYPE';
+      return cb(error);
+    }
+    cb(null, true);
+  }
+});
 
-// File upload endpoint
+// Routes
+
+app.get('/', (req, res) => {
+  res.send('Welcome to online storage API');
+});
+
+// Upload file endpoint
 app.post('/upload', upload.single('file'), async (req, res) => {
-  const { filename } = req.file;
-  const filePath = `/uploads/${filename}`;
-
   try {
-    // Save file info to the database
+    const { originalname, mimetype, filename, size } = req.file;
+
+    // Save file metadata to the database
     const file = await prisma.file.create({
-      data: { name: filename, path: filePath },
+      data: {
+        originalName: originalname,
+        mimeType: mimetype,
+        fileName: filename,
+        size,
+        filePath: path.join('uploads', filename)
+      }
     });
 
-    // Return the saved file info as JSON
-    res.json(file);
+    res.status(201).json({ message: 'File uploaded successfully', file });
   } catch (error) {
+    console.error(error);
     res.status(500).json({ error: 'Failed to upload file' });
   }
 });
 
-// Endpoint to get all uploaded files
+// Get all uploaded files
 app.get('/files', async (req, res) => {
   try {
-    // Retrieve all files from the database
     const files = await prisma.file.findMany();
     res.json(files);
   } catch (error) {
+    console.error(error);
     res.status(500).json({ error: 'Failed to retrieve files' });
   }
 });
 
-// Start the server and check database connection
+// Start the server
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, async () => {
-    try {
-        await prisma.$connect();
-        console.log('Connected to the database');
-    } catch (error) {
-        console.error('Failed to connect to the database', error);
-    }
-
-    console.log(`Server is running on ${PORT}`);
+app.listen(PORT, () => {
+  console.log(`Server is running on ${PORT}`);
 });

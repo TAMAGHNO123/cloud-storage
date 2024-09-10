@@ -7,6 +7,12 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model data {
-  id String @id @default(auto()) @map("_id") @db.ObjectId
+model File {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  originalName String
+  mimeType     String
+  fileName     String
+  size         Int
+  filePath     String
+  createdAt    DateTime @default(now())
 }

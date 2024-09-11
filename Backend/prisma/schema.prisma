@@ -8,11 +8,26 @@ datasource db {
 }
 
 model File {
-  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  id           Int       @id @default(autoincrement())
   originalName String
   mimeType     String
   fileName     String
   size         Int
   filePath     String
-  createdAt    DateTime @default(now())
+  iv           String
+  tags         Tag[]     @relation(references: [id])
+  versions     Version[]
+}
+
+model Version {
+  id           Int       @id @default(autoincrement())
+  fileId       Int
+  fileName     String
+  createdAt    DateTime  @default(now())
+  file         File      @relation(fields: [fileId], references: [id])
+}
+model Tag {
+  id     Int    @id @default(autoincrement())
+  name   String @unique
+  files  File[] @relation(references: [id])
 }

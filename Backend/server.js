@@ -1,9 +1,12 @@
+require('dotenv').config(); // Load environment variables from .env file
+
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const { PrismaClient } = require('@prisma/client');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const app = express();
 const prisma = new PrismaClient();
@@ -27,7 +30,7 @@ async function connectToDatabase() {
     console.log('Database connected successfully');
   } catch (error) {
     console.error('Error connecting to the database', error);
-    process.exit(1); 
+    process.exit(1);
   }
 }
 
@@ -57,16 +60,51 @@ const upload = multer({
   }
 });
 
+// Encryption and decryption functions
+const algorithm = 'aes-256-cbc';
+const key = crypto.randomBytes(32);
+const iv = crypto.randomBytes(16);
+
+function encryptFile(buffer) {
+  const cipher = crypto.createCipheriv(algorithm, key, iv);
+  const encrypted = Buffer.concat([cipher.update(buffer), cipher.final()]);
+  return { iv: iv.toString('hex'), encryptedData: encrypted.toString('hex') };
+}
+
+function decryptFile(encrypted) {
+  const iv = Buffer.from(encrypted.iv, 'hex');
+  const encryptedText = Buffer.from(encrypted.encryptedData, 'hex');
+  const decipher = crypto.createDecipheriv(algorithm, key, iv);
+  const decrypted = Buffer.concat([decipher.update(encryptedText), decipher.final()]);
+  return decrypted;
+}
+
 // Routes
 
 app.get('/', (req, res) => {
   res.send('Welcome to online storage API');
 });
 
-// Upload file endpoint
+// Upload file endpoint with tagging
 app.post('/upload', upload.single('file'), async (req, res) => {
   try {
     const { originalname, mimetype, filename, size } = req.file;
+    const { tags } = req.body; // Expecting tags as a comma-separated string
+    const fileBuffer = fs.readFileSync(req.file.path);
+    const encryptedFile = encryptFile(fileBuffer);
+
+    // Save encrypted file
+    fs.writeFileSync(req.file.path, encryptedFile.encryptedData);
+
+    // Process tags
+    const tagList = tags ? tags.split(',').map(tag => tag.trim()) : [];
+    const tagRecords = await Promise.all(tagList.map(async (tag) => {
+      return await prisma.tag.upsert({
+        where: { name: tag },
+        update: {},
+        create: { name: tag }
+      });
+    }));
 
     // Save file metadata to the database
     const file = await prisma.file.create({
@@ -75,7 +113,11 @@ app.post('/upload', upload.single('file'), async (req, res) => {
         mimeType: mimetype,
         fileName: filename,
         size,
-        filePath: path.join('uploads', filename)
+        filePath: path.join('uploads', filename),
+        iv: encryptedFile.iv,
+        tags: {
+          connect: tagRecords.map(tag => ({ id: tag.id }))
+        }
       }
     });
 
@@ -97,8 +139,53 @@ app.get('/files', async (req, res) => {
   }
 });
 
+// Download file endpoint
+app.get('/uploads/:filename', async (req, res) => {
+  try {
+    const file = await prisma.file.findUnique({
+      where: { fileName: req.params.filename }
+    });
+
+    if (!file) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    const encryptedData = fs.readFileSync(path.join(__dirname, file.filePath));
+    const decryptedData = decryptFile({ iv: file.iv, encryptedData: encryptedData.toString() });
+
+    res.setHeader('Content-Type', file.mimeType);
+    res.send(decryptedData);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to download file' });
+  }
+});
+
+// Search files endpoint
+app.get('/search', async (req, res) => {
+  try {
+    const { query } = req.query;
+    console.log(`Search query: ${query}`); // Log the search query
+    const files = await prisma.file.findMany({
+      where: {
+        OR: [
+          { originalName: { contains: query, mode: 'insensitive' } },
+          { tags: { some: { name: { contains: query, mode: 'insensitive' } } } }
+        ]
+      },
+      include: { tags: true }
+    });
+    res.json(files);
+  } catch (error) {
+    console.error('Error during search:', error); // Log the error
+    res.status(500).json({ error: 'Failed to search files' });
+  }
+});
+
 // Start the server
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server is running on ${PORT}`);
+  // Log the DATABASE_URL to verify it's loaded
+  console.log(`DATABASE_URL: ${process.env.DATABASE_URL}`);
 });

@@ -1,4 +1,3 @@
-// FileUpload.jsx
 import React, { useState } from 'react';
 import axios from 'axios';
 import { ToastContainer, toast } from 'react-toastify';
@@ -7,6 +6,7 @@ import 'react-toastify/dist/ReactToastify.css';
 const FileUpload = () => {
   const [selectedFile, setSelectedFile] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [tags, setTags] = useState('');
   const [error, setError] = useState('');
 
   const handleFileChange = (e) => {
@@ -27,6 +27,7 @@ const FileUpload = () => {
 
     const formData = new FormData();
     formData.append('file', selectedFile);
+    formData.append('tags', tags);
 
     try {
       await axios.post('http://localhost:4050/upload', formData, {
@@ -37,6 +38,7 @@ const FileUpload = () => {
       toast.success('File uploaded successfully!');
       setSelectedFile(null);
       setUploadProgress(0);
+      setTags('');
     } catch (err) {
       toast.error('Failed to upload file.');
     }
@@ -48,6 +50,13 @@ const FileUpload = () => {
         type="file"
         onChange={handleFileChange}
         className="mb-4"
+      />
+      <input
+        type="text"
+        value={tags}
+        onChange={(e) => setTags(e.target.value)}
+        placeholder="Enter tags, separated by commas"
+        className="mb-4 p-2 border rounded"
       />
       <button
         onClick={handleUpload}
